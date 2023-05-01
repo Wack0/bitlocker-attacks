@@ -16,7 +16,7 @@ Please note that this will only protect against software attacks.
 
 ## Hardware attacks
 
-Hardware attacks are only useful for when the attacker has physical access to a system where the VMK is sealed by TPM only.
+Hardware attacks are typically only useful for when the attacker has physical access to a system where the VMK is sealed by TPM only.
 
 | Summary | Description | Fixed | Public disclosure timeframe | Discovered by |
 | ---     | ---         | ---   | ---                         | ---           |
