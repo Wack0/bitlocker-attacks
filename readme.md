@@ -35,6 +35,7 @@ Where code execution can be obtained inside a boot application, it may be possib
 | Legacy integrity validation implemented associated options incorrectly | **Legacy integrity validation affected (where vulnerable bootmgr is used), secure boot integrity validation not affected at all**<br><br>BitLocker legacy integrity validation walks through all boot options, and either ensures they exist, ensures any unknown options do NOT exist, or ensures they are unchanged by hashing them.<br><br>The original implementation attempted to also walk through associated options, but used the incorrect offset to do so.<br><br>This would allow for crafting a BCD that contained boot options invisible to BitLocker legacy integrity validation.<br><br>Many dangerous options here, in particular `debug`, can lead to BitLocker key table dumping.<br><br>Fixed by using the correct offset when walking through associated options. This bug is CVE-2022-29127. | May 2022 | June 2022 (at emfcamp, thanks to bindiffing) | Matt Wesemann of Microsoft (WDG) |
 | [dangerous association](#dangerous-association): Legacy integrity validation implemented associated options incorrectly (part 2) | **Legacy integrity validation affected (where vulnerable bootmgr is used), secure boot integrity validation not affected at all**<br><br>The fix for the previous vuln was incorrect and only checked one level of associated options, whereas code that used the boot options would recurse.<br><br>This would allow for crafting a BCD that contained boot options invisible to BitLocker legacy integrity validation.<br><br>See also [the public disclosure](https://haqueers.com/@Rairii/109439636170607042).<br><br>Fixed by recursing into associated options like other code does. This bug is CVE-2022-22048. | July 2022 | December 2022; discovered in May 2022 when bindiffing previous patch | Rairii |
 | [bitpixie](#bitpixie): PXE soft reboot does not wipe derived bitlocker keys from memory | **Only exploitable on UEFI systems (not legacy BIOS, or CSM). Legacy integrity validation affected (where vulnerable bootmgr is used), secure boot integrity validation affected**<br><br>PXE soft reboot is allowed when booting from network, and just does `BS->LoadImage()` and `BS->StartImage()`.<br><br>Derived BitLocker keys are still in memory at the time `BS->StartImage` is called.<br><br>They can then be dumped from memory.<br><br>In addition: BitLocker keys are derived very early into loading a boot application. If loading the PE from disk failed, integrity validation is not performed and derived keys remain in memory.<br><br>A PXE soft reboot can then be performed, thus this bypasses legacy integrity validation too.<br><br>See also [the public disclosure](https://haqueers.com/@Rairii/109817927668949732).<br><br>Fixed by wiping bitlocker keytables in `bootmgr!BlNetSoftReboot` before calling `bootmgr!PxeSoftReboot`. This bug is CVE-2023-21563. | November 2022 (build 25236); January 2023 (backport)<br><br>Where Secure Boot integrity validation is used, **a downgrade attack would still work to exploit this vulnerability.**  | February 2023, discovered in August 2022 | Rairii |
+| [push button decrypt](#push-button-decrypt): reset in WinRE can be interrupted during decrypt, enabling attacker to get a shell to disable key protectors | **Windows Server is not vulnerable due to not supporting the reset feature. Legacy integrity validation and secure boot integrity validation affected, where vulnerable winre image is used**<br><br>When booting to a system's WinRE, keys are derived for the associated osvolume. These keys are allowed to stay in memory when doing a push button reset (with data removal).<br><br>Starting a "just remove my files" reset will start decrypting the drive at ~98% completion.<br><br>Rebooting at this point will cause a reboot into winre which will show an error and a button which reboots.<br><br>After rebooting, windows setup is launched into an upgrade screen. `Shift+F10` to get a shell works here.<br><br>A shell here is enough to pause decryption and remove all key protectors, the plaintext VMK can then be used to decrypt the FVEK which can be used with a previously made disk image.<br><br>Fixed by requiring a BitLocker recovery key before a reset. This bug is CVE-2022-41099. | November 2022 (winre image must be patched manually) | May 2023 | Unknown |
 
 
 ### dangerous association
@@ -70,3 +71,22 @@ When Secure Boot is disabled, that EFI application can just be an application to
 When Secure Boot is enabled, that EFI application can use a known Secure Boot bypass (where physical access is required if needed).  
 For exploiting a Windows boot application in this way, you will need to replace the BCD with your second one on the PXE server.  
 This means pressing an arrow key during `bootmgr` startup to force the boot menu to show; and then replacing the BCD on the PXE server at that point.
+
+### push button decrypt
+
+Exploitation involves:
+* **Dump the bitlocker protected osvolume to a disk image.** This method to get the FVEK leads to actual data loss!
+* Boot to WinRE using whatever means (force it by startup repair if needed, or just set bootsequence BCD element, etc).
+* Start a reset (Troubleshoot -> Reset this PC -> Remove everything). It's quicker to choose "Local reinstall". Be sure to choose "Just remove my files".  
+  * Choosing to "keep files" will ask for recovery key.
+  * If the system's WinRE is not vulnerable, it will also ask for a recovery key.
+* When the reset gets to ~98%, shut the system down forcefully (via holding power button down 7 seconds / etc).
+* Power the system back on, it should boot to WinRE again and show an error. Dismissing the error should reboot.
+* When you see the blue "updating" screen, press Shift+F10 to get to a shell.
+* Execute `manage-bde -pause C:` followed by `manage-bde -protectors -delete C:`
+* Shut the system down forcefully (again).
+
+At this point, the on-disk BitLocker metadata will contain a plaintext VMK.  
+Dump it, and use that VMK to decrypt the FVEK.  
+The decrypted FVEK can be used on the disk image made previously to decrypt the partition.
+
