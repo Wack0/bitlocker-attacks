@@ -76,6 +76,14 @@ This means pressing an arrow key during `bootmgr` startup to force the boot menu
 
 Exploitation involves:
 * **Dump the bitlocker protected osvolume to a disk image.** This method to get the FVEK leads to actual data loss!
+* You need to remove any key protector of type recovery key from the volume. This involves hex editing the disk. Make sure you have a clean dump first!
+  * Take a look at [the format documentation from libbde](https://github.com/libyal/libbde/blob/main/documentation/BitLocker%20Drive%20Encryption%20(BDE)%20format.asciidoc#512-fve-metadata-block-header-version-2--windows-7-and-later) for additional information.
+  * I searched for `-FVE-FS-` to find the metadata block initially (the first occurance of this will be in the BPB, not the metadata block)
+  * There are three copies of the metadata block on disk, you will need to edit them all.
+    * After finding the first copy of the metadata block I searched for the computer name in the description entry to find the rest.
+  * After finding a metadata block:
+    * Search for `02 00 08 00` to find a VMK entry (entry=`0x0002` meaning VMK, data type=`0x0008` meaning VMK)
+    * If the key protection type later on is `00 08` (`0x0800` meaning recovery key) then patch the `02 00 08 00` from earlier to `FF FF 08 00`.
 * Boot to WinRE using whatever means (force it by startup repair if needed, or just set bootsequence BCD element, etc).
 * Start a reset (Troubleshoot -> Reset this PC -> Remove everything). It's quicker to choose "Local reinstall". Be sure to choose "Just remove my files".  
   * Choosing to "keep files" will ask for recovery key.
