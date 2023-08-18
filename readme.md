@@ -90,3 +90,5 @@ At this point, the on-disk BitLocker metadata will contain a plaintext VMK.
 Dump it, and use that VMK to decrypt the FVEK.  
 The decrypted FVEK can be used on the disk image made previously to decrypt the partition.
 
+Please note: I only successfully exploited this issue on Windows 10 in very specific circumstances (TPM-only BitLocker with no recovery key).
+  However, [others have successfully exploited this issue using a vulnerable WinRE on Windows 11 (Nickel)](https://blog.scrt.ch/2023/08/14/cve-2022-41099-analysis-of-a-bitlocker-drive-encryption-bypass/).
