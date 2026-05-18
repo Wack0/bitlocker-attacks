@@ -42,6 +42,7 @@ Where code execution can be obtained inside a boot application, it may be possib
 | break out in hives 2: alternative method for exploiting systemdatadevice element, usable with a downgrade attack | The fix for break out in hives updated winload.<br><br>However, earlier (unfixed) revisions of winload can **potentially** still run to boot its major version of Windows (may not work in practise for every version).<br><br>Thus, attacker can bring in an old winload, modify BCD to boot from it, and repeat the attack, however a different exploitation method must be used.<br><br>**The `winpe` element must be set in BCD (if it is not, the SYSTEM hive in the bitlocker encrypted osvolume will get corrupted!)**<br><br>The working SYSTEM hive here would come from an `install.wim` image of the same major version of Windows (not WinPE/WinRE). The Win32 subsystem will not be able to initialise fully, but smss can be configured in `ControlSet001\Control\Session Manager!SetupExecute` to achieve arbitrary native subsystem code execution as SYSTEM with derived keys in memory.<br><br>Fixed by wiping `systemdatadevice` element in bootmgr if Secure Boot is enabled, but the fix was only applied to the PCA 2023-signed bootmgr_ex, so **without the KB5025885 mitigation enabled, this vulnerability is still present and remains unfixed.** This bug is CVE-2025-21213. | January 2025, in PCA2023-signed bootmgr_ex only | February 2025; discovered in January 2024 (after the original fix) | Rairii |
 | Boot environment does not check SDI when loading ramdisk, which has offset to the used WIM | When loading a ramdisk, the boot environment (and NT `wimfsf.sys`) gets the offset to the used WIM from the SDI file if it's present, and there is no validation of the SDI file used. Therefore a crafted SDI file can be used in the recovery sequence to boot an arbitrary WinPE WIM with the osdevice bitlocker keys derived.<br><br>Fixed by checking that the calculated WIM offset is equal to the actual load offset of the WIM, and returning STATUS_INVALID_IMAGE_FORMAT if not. This bug is CVE-2025-48804. | July 2025 | August 2025 (at Black Hat) | Alon Leviev and Netanel Ben Simon of Microsoft (MORSE) |
 | [YellowKey](https://github.com/Nightmare-Eclipse/YellowKey) aka trans writes: Filesystem transaction files located on one volume can affect files on another volume | NTFS transaction logs can affect files on another volume.<br><br>This can be used when booting WinRE with a removable drive attached (NTFS formatted) to delete `winpeshl.ini` on the ramdisk. With this file deleted, `winpeshl.exe` will launch a SYSTEM shell if Ctrl key is held, with the derived osdevice bitlocker keys in memory.<br><br>See also [additional writeup by Will Dormann](https://infosec.exchange/@wdormann/116565129854382214). | None | May 2026 | Nightmare-Eclipse |
+| [ram leak](#ram-leak): Boot environment has no restrictions on ramdisk creation device | When configured to create a ramdisk, the file to load and device to load it from is provided in the BCD.<br><br>The boot environment has no checks on the device passed, and thus, BitLocker-encrypted partitions are allowed, assuming the keys can be derived.<br><br>Therefore, an attacker can set up a ramdisk with an arbitrary file from a BitLocker-encrypted partition, and the file contents will stay in RAM even if the derived BitLocker keys are wiped, and can be dumped later.<br><br>Additionally, an attacker can use this to determine whether a file exists on a BitLocker-encrypted OS partition.<br><br>Interesting targets include: hibernation file (contains derived bitlocker keys, and is compressed so should fit entirely into RAM, especially if "shutting down" aka logoff-then-hibernate from the logon screen), pagefile, SYSTEM and SAM hives, any third-party service or driver (identified from SYSTEM hive) to check for vulnerabilities. | None. MSRC closed as low priority due to misunderstanding. | May 2026, originally discovered March 2025. | Rairii |
 
 ### dangerous association
 
@@ -50,7 +51,7 @@ A vulnerable system will have the May 2022 or June 2022 updates installed, but n
 The associated options GUID is part of the hashed data, so the used device element must be marked as not verified.  
 There are no elements that can be used on Windows 7 and below (although when custom non-default settings are used, it could still be possible).  
 On Windows 8 and above, `osloader!osdevice` is not verified by default, and as such can be used.  
-The easiest way to exploit this is to use the BCD raw device editor, bcdeditmod **(still not publicly released yet, it will happen eventually)**, although editing the BCD registry hive manually is also possible (figure it out yourself).
+The easiest way to exploit this is to use the BCD raw device editor, [bcdeditmod](https://github.com/Wack0/bcdeditmod), although editing the BCD registry hive manually is also possible (figure it out yourself).
 
 Exploitation involves:
 * take the BCD from your target device, create two device elements
@@ -97,3 +98,26 @@ The decrypted FVEK can be used on the disk image made previously to decrypt the 
 
 Please note: I only successfully exploited this issue on Windows 10 in very specific circumstances (TPM-only BitLocker with no recovery key).
   However, [others have successfully exploited this issue using a vulnerable WinRE on Windows 11 (Nickel)](https://blog.scrt.ch/2023/08/14/cve-2022-41099-analysis-of-a-bitlocker-drive-encryption-bypass/).
+
+### ram leak
+
+As far as I am aware, this vulnerability has existed as long as the boot manager has - it appears to be present as early as `6.0.5098.0 (winmain_beta1.050628-1740)` from June 2005, although that pre-dates the BCD so exploitation would be different in builds that early. Relevant code seems to also exist earlier too (the ramdisk-related code appears to be the same in build 5048 from April 2005), but build 5098 is the earliest dumped build with BitLocker present in some form.
+
+To exploit this, you need to set up a default entry and a recovery sequence like in bitpixie. This is to so the keys are derived for the OS device when the file is loaded.
+
+The recovery sequence must have an additional device entry to set up the ramdisk. Use [bcdeditmod](https://github.com/Wack0/bcdeditmod) for this. Use a custom element here like `custom:21100000`. An example of a device entry to use here would be `!raw:block[ram[part2[hd[gpt[{D2E23617-2338-4685-A2D7-F3133312E12E}]],gptsig[{1B85332B-AD73-4D9A-BFC3-B39443D3DFE4}]],:\hiberfil.sys:]]` - you'd want to replace the `part2` block device here with the one from your target system's BCD.
+
+The file can then be dumped out of memory using whatever method that works for you. I prefer to use older winload into self-signed mcupdate via advanced options menu, but other options are available (PXE soft reboot into a third party operating system for example; memory dumping from WinPE by using a bugcheck or a known vulnerable driver is possible, but winload will mark the memory area as free in the NT memory map so it might get overwritten without some other settings to mark that memory as bad/etc in winload).
+
+A [proof of concept implementation](ramleak.zip) of my preferred method is included in this repository as `ramleak.zip`. Read the included readme for usage instructions.
+
+Shout out to Maxim Suhanov, this was inspired by reading CrashXTS writeup and figuring out some other way to possibly dump `hiberfil.sys`.
+
+And now for my own thoughts, about this bug and about yellowkey:
+
+This was the first time I had a real issue with submitting to MSRC, and was mainly a misunderstanding from their side related to Secure Boot. Given that other bitlocker 0day being dropped I decided to release this now, I've been sitting on this for almost a year now wondering what to do with it.
+
+Unlike yellowkey, I won't make overblown calls about this being a "backdoor", in my opinion I don't think yellowkey is a backdoor, the related component is to do with WinPE (not WinRE-specific), and the main "vuln" there is getting winpeshl.ini deleted to reach that codepath, I can totally understand why MS thought deleting it in a WinRE+bitlocker scenario wasn't possible.
+
+Given that loading a ramdisk from a bitlocker encrypted partition is actually a feature in the boot environment, although I had to use an existing trick to actually get it to work, other people could also say this was a backdoor if they wanted, but I'm not going to go that far. The boot environment is complex (and keeps getting bigger, latest `bootmgfw_ex.efi` no longer fits in a 2.88MB image - end of an era), several vulns have been discovered because of how certain features interact with each other.
+
